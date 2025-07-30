@@ -3,27 +3,29 @@ import sys
 import time
 import traceback
 import typing
+import hashlib
 
 from datetime import datetime
 from PIL import Image, ImageGrab, ImageChops
+import win32clipboard
+import win32con
+import io
 
 import logging
 logger = logging.getLogger(__name__)
-
 BORDER_SIZE = 40
+POLL_INTERVAL = 1  # seconds
 
 
 def crop_to_object(image: Image.Image, border: int = 40) -> Image.Image:
-    bg_color = image.getpixel((0, 0))  # Assume top-left is background
+    bg_color = image.getpixel((0, 0))  # assume top-left is background
     bg_image = Image.new(image.mode, image.size, bg_color)
     diff = ImageChops.difference(image, bg_image).convert("L")
-
-    # Enhance contrast slightly for better bounding box detection
     diff = diff.point(lambda x: 255 if x > 10 else 0)
 
     bbox = diff.getbbox()
     if not bbox:
-        logger.warning("No object detected in image.")
+        logger.warning("No object detected.")
         return image
 
     left = max(bbox[0] - border, 0)
@@ -31,35 +33,56 @@ def crop_to_object(image: Image.Image, border: int = 40) -> Image.Image:
     right = min(bbox[2] + border, image.width)
     lower = min(bbox[3] + border, image.height)
 
-    cropped = image.crop((left, upper, right, lower))
-    logger.info(f"Cropped image to box: ({left}, {upper}, {right}, {lower})")
-    return cropped
+    return image.crop((left, upper, right, lower))
 
 
-def save_image(image: Image.Image, out_path: pathlib.Path) -> None:
-    image.save(out_path)
-    logger.info(f"Saved cropped image to: {out_path}")
+def image_to_clipboard(image: Image.Image) -> None:
+    """Copy an image to the Windows clipboard in DIB format."""
+    output = io.BytesIO()
+    image.convert("RGB").save(output, format="BMP")
+    data = output.getvalue()[14:]  # Strip BMP header
+    output.close()
+
+    win32clipboard.OpenClipboard()
+    win32clipboard.EmptyClipboard()
+    win32clipboard.SetClipboardData(win32con.CF_DIB, data)
+    win32clipboard.CloseClipboard()
+    logger.info("Updated clipboard with cropped image.")
+
+
+def image_hash(image: Image.Image) -> str:
+    """Generate a hash of image content for change detection."""
+    with io.BytesIO() as f:
+        image.save(f, format='PNG')
+        return hashlib.sha256(f.getvalue()).hexdigest()
+
+
+def monitor_clipboard():
+    last_hash = None
+    logger.info("Monitoring clipboard for image changes...")
+
+    while True:
+        try:
+            img = ImageGrab.grabclipboard()
+            if isinstance(img, Image.Image):
+                current_hash = image_hash(img)
+                if current_hash != last_hash:
+                    logger.info("New image detected in clipboard.")
+                    cropped = crop_to_object(img, BORDER_SIZE)
+                    image_to_clipboard(cropped)
+                    last_hash = current_hash
+            else:
+                logger.debug("Clipboard does not contain an image.")
+        except Exception as e:
+            logger.warning(f"Clipboard polling error: {e}")
+
+        time.sleep(POLL_INTERVAL)
 
 
 def main() -> None:
     start_time = time.perf_counter()
-    logger.info("Starting operation...")
-
-    try:
-        image = ImageGrab.grabclipboard()
-        if not isinstance(image, Image.Image):
-            logger.error("No image found in clipboard.")
-            return
-
-        logger.info(f"Clipboard image size: {image.size}")
-        cropped = crop_to_object(image, BORDER_SIZE)
-
-        out_path = pathlib.Path("cropped_output.png")
-        save_image(cropped, out_path)
-
-    except Exception as e:
-        logger.exception(f"Error during processing: {e}")
-
+    logger.info("Starting clipboard watcher...")
+    monitor_clipboard()
     end_time = time.perf_counter()
     duration = end_time - start_time
     logger.info(f"Completed operation in {duration:.4f}s.")
