@@ -39,14 +39,13 @@ import win32con
 import win32gui
 from datetime import datetime
 from pathlib import Path
-from PIL import Image
 from PIL import Image, ImageGrab, ImageChops
 from pystray import Icon, MenuItem, Menu
 from ctypes import wintypes
 
 logger = logging.getLogger(__name__)
 
-__version__ = "2.0.0"  # Major.Minor.Patch
+__version__ = "2.0.1"  # Major.Minor.Patch
 
 CONFIG = {}
 
@@ -72,7 +71,7 @@ def open_script_folder():
     logger.debug(f"Opened script folder: {json.dumps(str(folder_path))}")
 
 
-def on_exit(icon):
+def on_exit():
     global hwnd, tray_icon
     logger.debug("Exit pressed on system tray icon")
     if tray_icon:
